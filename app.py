@@ -35,7 +35,10 @@ def get_video_stats(url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            return info.get('view_count')
+            return {
+                'views': info.get('view_count'),
+                'likes': info.get('like_count') # NEW: Extract the like count
+            }
     except Exception as e:
         print(f"Error fetching stats for {url}: {e}")
         return None
@@ -54,16 +57,25 @@ def check_video():
         return jsonify({"error": "Missing URL or ID"}), 400
 
     print(f"Checking single video: {video_url}...")
-    views = get_video_stats(video_url)
+    stats = get_video_stats(video_url)
 
-    if views is not None:
-        # Update specific document in Firestore
+    if stats is not None:
+        views = stats.get('views')
+        likes = stats.get('likes')
+        
+        # Prepare the update payload
         try:
-            db.collection('videos').document(video_id).update({
-                'views': views,
+            update_data = {
+                'views': views if views is not None else 0,
                 'last_updated': firestore.SERVER_TIMESTAMP
-            })
-            return jsonify({"status": "success", "views": views})
+            }
+            # Only update likes if the platform provides them
+            if likes is not None:
+                update_data['likes'] = likes
+
+            # Update specific document in Firestore
+            db.collection('videos').document(video_id).update(update_data)
+            return jsonify({"status": "success", "views": views, "likes": likes})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     
