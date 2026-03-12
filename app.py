@@ -43,6 +43,13 @@ def get_video_stats(url):
         print(f"Error fetching stats for {url}: {e}")
         return None
 
+# Safe integer parsing helper
+def safe_int(val):
+    try:
+        return int(val) if val is not None else 0
+    except (ValueError, TypeError):
+        return 0
+
 # --- NEW ROUTE: CHECK SINGLE VIDEO ---
 @app.route('/check-video', methods=['POST'])
 def check_video():
@@ -60,23 +67,52 @@ def check_video():
     stats = get_video_stats(video_url)
 
     if stats is not None:
-        views = stats.get('views')
-        likes = stats.get('likes')
+        scraped_views = stats.get('views')
+        scraped_likes = stats.get('likes')
         
-        # Prepare the update payload
         try:
+            # 1. Fetch the CURRENT video document from Firebase
+            doc_ref = db.collection('videos').document(video_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return jsonify({"error": "Document not found in database"}), 404
+                
+            doc_data = doc.to_dict()
+            
+            # 2. Get existing views/likes (Safely parse them to integers)
+            current_views = safe_int(doc_data.get('views'))
+            current_likes = safe_int(doc_data.get('likes'))
+            
+            new_views = safe_int(scraped_views)
+            
+            # 3. COMPARE: Keep the highest value
+            final_views = max(new_views, current_views)
+            
+            # Prepare the update payload
             update_data = {
-                'views': views if views is not None else 0,
+                'views': final_views,
                 'last_updated': firestore.SERVER_TIMESTAMP
             }
-            # Only update likes if the platform provides them
-            if likes is not None:
-                update_data['likes'] = likes
+            
+            # 4. Do the same comparison for likes (if the platform provides them)
+            final_likes = None
+            if scraped_likes is not None:
+                new_likes = safe_int(scraped_likes)
+                final_likes = max(new_likes, current_likes)
+                update_data['likes'] = final_likes
 
-            # Update specific document in Firestore
-            db.collection('videos').document(video_id).update(update_data)
-            return jsonify({"status": "success", "views": views, "likes": likes})
+            # 5. Update specific document in Firestore
+            doc_ref.update(update_data)
+            return jsonify({
+                "status": "success", 
+                "views": final_views, 
+                "likes": final_likes,
+                "note": "Used highest value" if (final_views == current_views and new_views < current_views) else "Updated"
+            })
+            
         except Exception as e:
+            print(f"Database error: {e}")
             return jsonify({"error": str(e)}), 500
     
     return jsonify({"error": "Could not fetch views"}), 500
