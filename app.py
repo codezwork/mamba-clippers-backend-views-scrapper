@@ -51,6 +51,7 @@ def safe_int(val):
         return 0
 
 # --- NEW ROUTE: CHECK SINGLE VIDEO ---
+# --- NEW ROUTE: CHECK SINGLE VIDEO ---
 @app.route('/check-video', methods=['POST'])
 def check_video():
     if not db:
@@ -89,27 +90,46 @@ def check_video():
             # 3. COMPARE: Keep the highest value
             final_views = max(new_views, current_views)
             
-            # Prepare the update payload
-            update_data = {
-                'views': final_views,
-                'last_updated': firestore.SERVER_TIMESTAMP
-            }
-            
-            # 4. Do the same comparison for likes (if the platform provides them)
             final_likes = None
             if scraped_likes is not None:
                 new_likes = safe_int(scraped_likes)
                 final_likes = max(new_likes, current_likes)
-                update_data['likes'] = final_likes
 
-            # 5. Update specific document in Firestore
-            doc_ref.update(update_data)
-            return jsonify({
-                "status": "success", 
-                "views": final_views, 
-                "likes": final_likes,
-                "note": "Used highest value" if (final_views == current_views and new_views < current_views) else "Updated"
-            })
+            # ---------------------------------------------------------
+            # THE SMART FIX: ONLY WRITE TO FIREBASE IF NUMBERS INCREASED
+            # ---------------------------------------------------------
+            needs_update = False
+            update_data = {}
+            
+            if final_views > current_views:
+                update_data['views'] = final_views
+                needs_update = True
+                
+            if final_likes is not None and final_likes > current_likes:
+                update_data['likes'] = final_likes
+                needs_update = True
+
+            if needs_update:
+                # Only add the timestamp if we are actually saving new numbers
+                update_data['last_updated'] = firestore.SERVER_TIMESTAMP
+                doc_ref.update(update_data)
+                
+                print(f"Update saved for {video_id}. Views: {final_views}")
+                return jsonify({
+                    "status": "success", 
+                    "views": final_views, 
+                    "likes": final_likes,
+                    "note": "Database updated"
+                })
+            else:
+                # Skip the write operation completely!
+                print(f"No changes for {video_id}. Skipping database write.")
+                return jsonify({
+                    "status": "success", 
+                    "views": current_views, 
+                    "likes": current_likes,
+                    "note": "Skipped write to save quota"
+                })
             
         except Exception as e:
             print(f"Database error: {e}")
